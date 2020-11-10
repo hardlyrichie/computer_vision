@@ -8,7 +8,10 @@ project(computer_vision)
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS
+  cv_bridge
   geometry_msgs
+  image_transport
+  neato_node
   rospy
   sensor_msgs
   std_msgs
@@ -106,7 +109,7 @@ find_package(catkin REQUIRED COMPONENTS
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES computer_vision
-#  CATKIN_DEPENDS geometry_msgs rospy sensor_msgs std_msgs
+#  CATKIN_DEPENDS cv_bridge geometry_msgs image_transport neato_node rospy sensor_msgs std_msgs
 #  DEPENDS system_lib
 )
 
