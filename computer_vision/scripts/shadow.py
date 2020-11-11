@@ -22,7 +22,7 @@ class ShadowApproacher:
     def __init__(self):
         rospy.init_node('ShadowApproacher')
 
-        self.MODEL_PATH= 'iter_10000.pth'
+        self.MODEL_PATH= 'shadow_detection.pt'
 
         # topic that gets the raw image from the neato camera
         self.bridge = CvBridge()
@@ -41,23 +41,20 @@ class ShadowApproacher:
         except CvBridgeError as e:
             print(e)
 
-        # 600, 600, 3
+        # (600, 600, 3)
         rows, cols, channels = cv_image.shape
-        print(cv_image.shape)
+        # print(cv_image.shape)
 
         mask_image = self.get_mask(cv_image)
-        print(os.getcwd())
 
-        cv2.imshow("Neato Camera", cv_image)
+        # cv2.imshow("Neato Camera", cv_image)
         cv2.imshow("Shadow Mask", mask_image)
         cv2.waitKey(3)
 
+    @torch.no_grad()
     def get_mask(self, image, trans_scale=416):
         """ Perform inference on shadow dection net """
-        # net = build_model('resnext101').cuda()
-        # net = torch.load(self.MODEL_PATH, map_location=self.device)
-        net = build_model('resnext101').to(device=self.device)
-        net.load_state_dict(torch.load(self.MODEL_PATH, map_location=self.device), strict=False)
+        net = torch.load(self.MODEL_PATH, map_location=self.device)
         net.eval()
 
         # Process image to correct format before feeding into the net
@@ -69,17 +66,18 @@ class ShadowApproacher:
             normal,
         ])
         to_pil = transforms.ToPILImage()
-
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         w, h, _ = image.shape
         image = PIL.Image.fromarray(image)
         image_trans = img_transform(image).unsqueeze(0).to(device=self.device)
-
+        
+        # Run image through the shadow detection model
         up_edge, up_shadow, up_shadow_final = net(image_trans)
         res = torch.sigmoid(up_shadow_final[-1])
         prediction = np.array(transforms.Resize((h, w))(to_pil(res.data.squeeze(0).cpu())))
         prediction = self.crf_refine(np.array(image), prediction)
 
+        # Return mask as a np.array to display with openCV
         return cv2.cvtColor(np.array(prediction), cv2.COLOR_RGB2BGR)
 
     def crf_refine(self, img, annos):
@@ -131,10 +129,5 @@ class ShadowApproacher:
         cv2.destroyAllWindows()
 
 if __name__ == '__main__':
-    # node = ShadowApproacher()
-    # node.run()
-    MODEL_PATH= 'iter_10000.pth'
-    device = torch.device('cpu')
-    net = build_model('resnext101').to(device=device)
-    net.load_state_dict(torch.load(MODEL_PATH, map_location=device), strict=False)
-    torch.save(net, 'shadow_detection.pt', pickle_module=dill)
+    node = ShadowApproacher()
+    node.run()
