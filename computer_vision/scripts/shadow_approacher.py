@@ -34,6 +34,7 @@ class ShadowApproacher:
 
         # In shadow flag
         self.within_shadow = False
+        self.seeking = True
 
     def process_raw_image(self, msg):
         """ Recives images from the /camera/image_raw topic and processes it into
@@ -51,6 +52,7 @@ class ShadowApproacher:
         cv2.imshow('Neato Camera', cv_image)
         if self.mask is not None:
             cv2.imshow('Shadow Mask', self.mask)
+            cv2.setMouseCallback('Shadow Mask', self.next_shadow)
 
         # Send image to ShadowMask node every 2 seconds
         current_time = rospy.Time.now()
@@ -83,44 +85,6 @@ class ShadowApproacher:
         contours, hierarchy = cv2.findContours(shadow_mask_grey, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(shadow_mask, contours, -1, (0,255,0), 3)
 
-        # Find COM for all contours and choose the optimal shadow 
-        # (largest weighted sum of closeness to neato & area of shadow)
-        optimal_shadow = None
-        highest_score = 0
-        for contour in contours:
-            M = cv2.moments(contour)
-            if M['m00'] == 0:
-                continue
-
-            # COM
-            cx, cy = self.center_of_mass(M)
-            cv2.circle(shadow_mask, (cx, cy), 5, (0, 0, 255), 1, cv2.LINE_AA)
-
-            # Most optimal shadow to move toward
-            closeness_weight = 0.7
-            weighted_sum = (cy / self.height) * closeness_weight + \
-                            (cv2.contourArea(contour) / (self.width * self.height)) * (1 - closeness_weight)
-            if weighted_sum > highest_score:
-                optimal_shadow = contour
-                highest_score = weighted_sum
-
-        # Optimal shadow COM
-        cv2.circle(shadow_mask, self.center_of_mass(cv2.moments(optimal_shadow)), 8, (0, 0, 255), -1)
-        
-        # TODO: Make more robust intersection algorithm
-        # rect = cv2.minAreaRect(optimal_shadow)
-        # box = cv2.boxPoints(rect)
-        # box = np.int0(box)
-        # cv2.drawContours(shadow_mask, [box], 0, (0, 0, 255), 2)
-        x, y, w, h = cv2.boundingRect(optimal_shadow)
-        cv2.rectangle(shadow_mask, (x, y), (x + w, y + h), (0, 0, 255), 2)
-        shadow_box = {
-            'x': x, 
-            'y': y, 
-            'height': h, 
-            'width': w,
-        }
-
         # Neato bounding box
         neato_box = {
             'x': 93,
@@ -131,15 +95,70 @@ class ShadowApproacher:
         cv2.rectangle(shadow_mask, (neato_box['x'], neato_box['y']), 
                     (neato_box['x'] + neato_box['width'], neato_box['y'] + neato_box['height']), (255, 0, 0), 1)
 
+        # Find COM for all contours and choose the optimal shadow 
+        # (largest weighted sum of closeness to neato & area of shadow)
+        optimal_shadow = None
+        highest_score = 0
+        shadow_box = None
+        shadows_in_neato = 0
+        for contour in contours:
+            M = cv2.moments(contour)
+            if M['m00'] == 0:
+                continue
+
+            # COM
+            cx, cy = self.center_of_mass(M)
+            cv2.circle(shadow_mask, (cx, cy), 5, (0, 0, 255), 1, cv2.LINE_AA)
+
+            # Find bounding box for current contour
+            x, y, w, h = cv2.boundingRect(contour)
+            contour_box = {
+                'x': x, 
+                'y': y, 
+                'height': h, 
+                'width': w,
+            }
+
+            # Most optimal shadow to move toward
+            closeness_weight = 0.6
+            weighted_sum = (cy / self.height) * closeness_weight + \
+                            (cv2.contourArea(contour) / (self.width * self.height / 2)) * (1 - closeness_weight)            
+
+            intersection = self.check_intersection(contour_box, neato_box)
+            if intersection:
+                shadows_in_neato += 1
+
+            # Ignore shadows that are in the neato bounding box area if in seeking mode
+            # This allows the neato to find other shadows outside the current one it is in
+            if self.seeking and intersection:
+                continue
+
+            # Keep most optimal shadow
+            if weighted_sum > highest_score:
+                optimal_shadow = contour
+                highest_score = weighted_sum
+                shadow_box = contour_box
+
+        # Turn off seeking flag if there are no shadows in neato bounding box
+        if shadows_in_neato == 0:
+            self.seeking = False
+
+        # Optimal shadow COM
+        cv2.circle(shadow_mask, self.center_of_mass(cv2.moments(optimal_shadow)), 8, (0, 0, 255), -1)
+        
+        # Draw optimal shadow bounding box
+        cv2.rectangle(shadow_mask, (shadow_box['x'], shadow_box['y']), 
+                    (shadow_box['x'] + shadow_box['width'], shadow_box['y'] + shadow_box['height']), (0, 0, 255), 2)
+
         # Check if neato is within the shadow (front of neato will be shaded) 
         self.within_shadow = self.check_intersection(shadow_box, neato_box)
 
         # Save the shadow mask after processing and visualizations
         self.mask = shadow_mask
 
+        # Move neato if there is an optimal shadow
         if optimal_shadow is not None:
             self.move_to_shadow(optimal_shadow)
-            # pass
 
     def center_of_mass(self, moment):
         cx = int(moment['m10'] / moment['m00'])
@@ -175,16 +194,16 @@ class ShadowApproacher:
         return (highest_start_point, overlap_length)
 
     def move_to_shadow(self, shadow):
+        m = Twist()
         com = self.center_of_mass(cv2.moments(shadow))
 
         # Rotate amount based on how close COM is to center of image horizontally, range from -0.5 to -0.5
         rotate = ((self.width / 2) - com[0]) / self.width 
-        rospy.loginfo(rotate)
-        m = Twist()
+
         if abs(rotate) > .1:
             rospy.loginfo('Rotating neato')
             m.angular.z = self.k * rotate
-        elif self.within_shadow:
+        elif self.within_shadow and not self.seeking:
             # Stop moving if neato is in a shadow
             rospy.loginfo('Neato is within a shadow, stop moving')
             m.linear = Vector3(0,0,0)
@@ -196,6 +215,11 @@ class ShadowApproacher:
 
         self.vel_pub.publish(m)
 
+    def next_shadow(self, event, x, y, flags, param):
+        """ Callback that handles mouse events. Tells robot to move to next shadow """
+        if event == cv2.EVENT_LBUTTONDOWN:
+            rospy.loginfo('Seeking mode on')
+            self.seeking = True
 
     def run(self):
         r = rospy.Rate(5)
