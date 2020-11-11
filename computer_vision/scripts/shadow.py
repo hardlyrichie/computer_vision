@@ -16,6 +16,7 @@ import os
 from networks.MTMT import build_model
 import numpy as np
 import dill
+import time
 
 class ShadowApproacher:
     """" Class that provides the functionality to find and move toward shadows """
@@ -30,6 +31,8 @@ class ShadowApproacher:
 
         self.device = torch.device('cpu')
 
+        self.last_shadow_time = rospy.Time.now()
+
     def process_image(self, msg):
         """ Recives images from the /camera/image_raw topic and processes it into
             an openCV image.
@@ -43,13 +46,18 @@ class ShadowApproacher:
 
         # (600, 600, 3)
         rows, cols, channels = cv_image.shape
-        # print(cv_image.shape)
+        cv2.imshow("Neato Camera", cv_image)
 
-        mask_image = self.get_mask(cv_image)
+        # Get mask from shadow detection net every 3 seconds
+        current_time = rospy.Time.now()
+        if (current_time - self.last_shadow_time).to_sec() > 2:
+            print('Performing inference on shadow detection net!')
+            mask_image = self.get_mask(cv_image)
+            cv2.imshow("Shadow Mask", mask_image)
+            self.last_shadow_time = current_time
 
-        # cv2.imshow("Neato Camera", cv_image)
-        cv2.imshow("Shadow Mask", mask_image)
         cv2.waitKey(3)
+
 
     @torch.no_grad()
     def get_mask(self, image, trans_scale=416):
