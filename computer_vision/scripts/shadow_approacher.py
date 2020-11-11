@@ -37,6 +37,7 @@ class ShadowApproacher:
         self.within_shadow = False
         self.seeking = True
         self.e_stop = False
+        self.helping_push = True
 
     def process_raw_image(self, msg):
         """ Recives images from the /camera/image_raw topic and processes it into
@@ -172,6 +173,9 @@ class ShadowApproacher:
 
             # Check if neato is within the shadow (front of neato will be shaded) 
             self.within_shadow = self.check_intersection(shadow_box, neato_box)
+            # Give neato back helping push ability if not in shadow
+            if not self.within_shadow:
+                self.helping_push = True
 
             # Move neato if there is an optimal shadow
             self.move_to_shadow(optimal_shadow)
@@ -230,10 +234,17 @@ class ShadowApproacher:
             rospy.loginfo('Rotating neato')
             m.angular.z = self.k * rotate
         elif self.within_shadow and not self.seeking:
-            # Stop moving if neato is in a shadow
-            rospy.loginfo('Neato is within a shadow, stop moving')
-            m.linear = Vector3(0,0,0)
-            m.angular = Vector3(0,0,0) 
+            # Give neato a helpful push the first time it enters the shadow so that the neato is further inside
+            if self.helping_push:
+                rospy.loginfo('Give neato a helpful push')
+                m.linear.x = .15
+                m.angular = Vector3(0,0,0) 
+                self.helping_push = False
+            else:
+                # Stop moving if neato is in a shadow
+                rospy.loginfo('Neato is within a shadow, stop moving')
+                m.linear = Vector3(0,0,0)
+                m.angular = Vector3(0,0,0) 
         else:
             # Move forward if COM is around the center of image horizontally
             m.angular.z = 0
@@ -251,7 +262,7 @@ class ShadowApproacher:
             m.angular = Vector3(0,0,0) 
         else:
             rospy.loginfo('Hunting behavior')
-            m.angular.z = random.choice([.3] * 6 + [0] * 4)
+            m.angular.z = random.choice([-.1] * 6 + [0] * 4)
             m.linear.x = random.choice([.05] * 6 + [0] * 4)
 
         self.vel_pub.publish(m)
