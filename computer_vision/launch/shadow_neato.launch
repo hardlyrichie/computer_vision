@@ -1,0 +1,4 @@
+<launch>
+    <node pkg="computer_vision" type="shadow_approacher.py" name="shadow_approacher_node" output="screen" />
+    <node pkg="computer_vision" type="shadow_mask.py" name="shadow_mask_node" output="screen" />
+</launch>

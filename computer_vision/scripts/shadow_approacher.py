@@ -26,6 +26,7 @@ class ShadowApproacher:
         self.last_shadow_time = rospy.Time.now()
 
         self.mask = None
+        self.width, self.height = 600, 600
 
     def process_raw_image(self, msg):
         """ Recives images from the /camera/image_raw topic and processes it into
@@ -39,10 +40,10 @@ class ShadowApproacher:
             print(e)
 
         # (600, 600, 3)
-        rows, cols, channels = cv_image.shape
+        self.width, self.height, channels = cv_image.shape
         cv2.imshow('Neato Camera', cv_image)
         if self.mask is not None:
-            cv2.imshow('Shadow mask', self.mask)
+            cv2.imshow('Shadow Mask', self.mask)
 
         # Send image to ShadowMask node every 2 seconds
         current_time = rospy.Time.now()
@@ -67,17 +68,51 @@ class ShadowApproacher:
         kernel = np.ones((5,5), np.uint8)
         shadow_mask_grey = cv2.cvtColor(shadow_mask, cv2.COLOR_BGR2GRAY)
         ret, shadow_mask_grey = cv2.threshold(shadow_mask_grey, 127, 255, cv2.THRESH_TOZERO)
-        shadow_mask_grey = cv2.erode(shadow_mask_grey, kernel, iterations=2)
+        shadow_mask_grey = cv2.erode(shadow_mask_grey, kernel, iterations=1)
         shadow_mask_grey = cv2.dilate(shadow_mask_grey, kernel, iterations=1)
         ret, shadow_mask_grey = cv2.threshold(shadow_mask_grey, 230, 255, cv2.THRESH_TOZERO)
 
         # Draw contour around shadows
         contours, hierarchy = cv2.findContours(shadow_mask_grey, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        # cnt = contours[4]
-        # cv.drawContours(shadow_mask, [cnt], 0, (0,255,0), 3)
         cv2.drawContours(shadow_mask, contours, -1, (0,255,0), 3)
 
+        # Find COM for all contours and choose the optimal shadow 
+        # (largest weighted sum of closeness to neato & area of shadow)
+        optimal_shadow = contours[0]
+        highest_score = 0
+        for contour in contours:
+            M = cv2.moments(contour)
+            if M['m00'] == 0:
+                continue
+
+            # COM
+            cx, cy = self.center_of_mass(M)
+            cv2.circle(shadow_mask, (cx, cy), 5, (0, 0, 255), 1, cv2.LINE_AA)
+
+            # Most optimal shadow to move toward
+            closeness_weight = 0.7
+            weighted_sum = (cy / self.height) * closeness_weight + \
+                            (cv2.contourArea(contour) / (self.width * self.height)) * (1 - closeness_weight)
+            if weighted_sum > highest_score:
+                optimal_shadow = contour
+                highest_score = weighted_sum
+
+        cv2.circle(shadow_mask, self.center_of_mass(cv2.moments(optimal_shadow)), 8, (0, 0, 255), -1)
+
+        # Save the shadow mask after processing and visualizations
         self.mask = shadow_mask
+
+        self.center_neato_to_shadow(optimal_shadow)
+
+    def center_of_mass(self, moment):
+        cx = int(moment['m10'] / moment['m00'])
+        cy = int(moment['m01'] / moment['m00'])
+        return cx, cy
+
+    def center_neato_to_shadow(self, shadow):
+        pass
+        # for contour in contours:
+
 
     def run(self):
         r = rospy.Rate(5)
