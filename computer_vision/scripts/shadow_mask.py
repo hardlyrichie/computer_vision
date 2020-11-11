@@ -4,34 +4,30 @@
 
 import rospy
 from sensor_msgs.msg import Image
-from geometry_msgs.msg import Twist, Vector3
-from nav_msgs.msg import Odometry
 from cv_bridge import CvBridge, CvBridgeError
 import cv2
 import PIL
 import torch
 from torchvision import transforms
 import pydensecrf.densecrf as dcrf
-import os
-from networks.MTMT import build_model
 import numpy as np
-import dill
 import time
+from config import MTMT_path
 
-class ShadowApproacher:
-    """" Class that provides the functionality to find and move toward shadows """
+class ShadowMask:
+    """" ROS node class that publishes the shadow mask from each camera image """
     def __init__(self):
-        rospy.init_node('ShadowApproacher')
+        rospy.init_node('ShadowMask')
 
-        self.MODEL_PATH= 'shadow_detection.pt'
+        self.MODEL_PATH = MTMT_path
 
-        # topic that gets the raw image from the neato camera
+        # topic that gets the request image from the ShadowApproacher node
         self.bridge = CvBridge()
-        rospy.Subscriber('/camera/image_raw', Image, self.process_image)
+
+        rospy.Subscriber('video_frame', Image, self.process_image)
+        self.pub = rospy.Publisher('frame_mask', Image, queue_size=10)
 
         self.device = torch.device('cpu')
-
-        self.last_shadow_time = rospy.Time.now()
 
     def process_image(self, msg):
         """ Recives images from the /camera/image_raw topic and processes it into
@@ -44,20 +40,13 @@ class ShadowApproacher:
         except CvBridgeError as e:
             print(e)
 
-        # (600, 600, 3)
-        rows, cols, channels = cv_image.shape
-        cv2.imshow("Neato Camera", cv_image)
+        rospy.loginfo('Performing inference on shadow detection net')
+        mask_image = self.get_mask(cv_image)
 
-        # Get mask from shadow detection net every 3 seconds
-        current_time = rospy.Time.now()
-        if (current_time - self.last_shadow_time).to_sec() > 2:
-            print('Performing inference on shadow detection net!')
-            mask_image = self.get_mask(cv_image)
-            cv2.imshow("Shadow Mask", mask_image)
-            self.last_shadow_time = current_time
+        rospy.loginfo('Publishing shadow mask')
+        self.pub.publish(self.bridge.cv2_to_imgmsg(mask_image))
 
         cv2.waitKey(3)
-
 
     @torch.no_grad()
     def get_mask(self, image, trans_scale=416):
@@ -134,8 +123,7 @@ class ShadowApproacher:
             rospy.spin()
         except KeyboardInterrupt:
             print("Shutting down")
-        cv2.destroyAllWindows()
 
 if __name__ == '__main__':
-    node = ShadowApproacher()
+    node = ShadowMask()
     node.run()
