@@ -21,12 +21,19 @@ class ShadowApproacher:
 
         rospy.Subscriber('/camera/image_raw', Image, self.process_raw_image) # topic that gets raw image from camera
         rospy.Subscriber('frame_mask', Image, self.process_mask) # topic that gets shadow mask image
-        self.pub = rospy.Publisher('video_frame', Image, queue_size=10) # publish to topic the camera image
+        self.video_pub = rospy.Publisher('video_frame', Image, queue_size=10) # publish to topic the camera image
+        self.vel_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
 
         self.last_shadow_time = rospy.Time.now()
 
         self.mask = None
         self.width, self.height = 600, 600
+
+        # Proportional control scaling factor
+        self.k = 0.3
+
+        # In shadow flag
+        self.within_shadow = False
 
     def process_raw_image(self, msg):
         """ Recives images from the /camera/image_raw topic and processes it into
@@ -48,7 +55,7 @@ class ShadowApproacher:
         # Send image to ShadowMask node every 2 seconds
         current_time = rospy.Time.now()
         if (current_time - self.last_shadow_time).to_sec() > 2:
-            mask_image = self.pub.publish(self.bridge.cv2_to_imgmsg(cv_image))
+            mask_image = self.video_pub.publish(self.bridge.cv2_to_imgmsg(cv_image))
             self.last_shadow_time = current_time
 
         cv2.waitKey(3)
@@ -78,7 +85,7 @@ class ShadowApproacher:
 
         # Find COM for all contours and choose the optimal shadow 
         # (largest weighted sum of closeness to neato & area of shadow)
-        optimal_shadow = contours[0]
+        optimal_shadow = None
         highest_score = 0
         for contour in contours:
             M = cv2.moments(contour)
@@ -97,21 +104,97 @@ class ShadowApproacher:
                 optimal_shadow = contour
                 highest_score = weighted_sum
 
+        # Optimal shadow COM
         cv2.circle(shadow_mask, self.center_of_mass(cv2.moments(optimal_shadow)), 8, (0, 0, 255), -1)
+        
+        # TODO: Make more robust intersection algorithm
+        # rect = cv2.minAreaRect(optimal_shadow)
+        # box = cv2.boxPoints(rect)
+        # box = np.int0(box)
+        # cv2.drawContours(shadow_mask, [box], 0, (0, 0, 255), 2)
+        x, y, w, h = cv2.boundingRect(optimal_shadow)
+        cv2.rectangle(shadow_mask, (x, y), (x + w, y + h), (0, 0, 255), 2)
+        shadow_box = {
+            'x': x, 
+            'y': y, 
+            'height': h, 
+            'width': w,
+        }
+
+        # Neato bounding box
+        neato_box = {
+            'x': 93,
+            'y': 567,
+            'height': 33,
+            'width': 417,
+        }
+        cv2.rectangle(shadow_mask, (neato_box['x'], neato_box['y']), 
+                    (neato_box['x'] + neato_box['width'], neato_box['y'] + neato_box['height']), (255, 0, 0), 1)
+
+        # Check if neato is within the shadow (front of neato will be shaded) 
+        self.within_shadow = self.check_intersection(shadow_box, neato_box)
 
         # Save the shadow mask after processing and visualizations
         self.mask = shadow_mask
 
-        self.center_neato_to_shadow(optimal_shadow)
+        if optimal_shadow is not None:
+            self.move_to_shadow(optimal_shadow)
+            # pass
 
     def center_of_mass(self, moment):
         cx = int(moment['m10'] / moment['m00'])
         cy = int(moment['m01'] / moment['m00'])
         return cx, cy
 
-    def center_neato_to_shadow(self, shadow):
-        pass
-        # for contour in contours:
+    def check_intersection(self, shadow, neato):
+        """ Checks if an shadow bounding box intersects with an neato bounding box """
+        x_overlap_point, overlap_width = self.find_range_overlap(shadow['x'], shadow['width'],
+                                                            neato['x'], neato['width'])
+        y_overlap_point, overlap_height = self.find_range_overlap(shadow['y'], shadow['height'],
+                                                            neato['y'], neato['height'])
+
+        # Check if there is a significantly large enough intersection
+        return overlap_width and overlap_height and overlap_width * overlap_height > 50
+
+
+    def find_range_overlap(self, point1, length1, point2, length2):
+        """ Finds the intersection in 1D space """
+        # Find the highest start point and lowest end point.
+        # The highest start point is the start point of the overlap.
+        # The lowest end point is the end point of the overlap.
+        highest_start_point = max(point1, point2)
+        lowest_end_point = min(point1 + length1, point2 + length2)
+
+        # Return null overlap if there is no overlap
+        if highest_start_point >= lowest_end_point:
+            return (None, None)
+
+        # Compute the overlap length
+        overlap_length = lowest_end_point - highest_start_point
+
+        return (highest_start_point, overlap_length)
+
+    def move_to_shadow(self, shadow):
+        com = self.center_of_mass(cv2.moments(shadow))
+
+        # Rotate amount based on how close COM is to center of image horizontally, range from -0.5 to -0.5
+        rotate = ((self.width / 2) - com[0]) / self.width 
+        rospy.loginfo(rotate)
+        m = Twist()
+        if abs(rotate) > .1:
+            rospy.loginfo('Rotating neato')
+            m.angular.z = self.k * rotate
+        elif self.within_shadow:
+            # Stop moving if neato is in a shadow
+            rospy.loginfo('Neato is within a shadow, stop moving')
+            m.linear = Vector3(0,0,0)
+            m.angular = Vector3(0,0,0) 
+        else:
+            # Move forward if COM is around the center of image horizontally
+            m.angular.z = 0
+            m.linear.x = .05
+
+        self.vel_pub.publish(m)
 
 
     def run(self):
