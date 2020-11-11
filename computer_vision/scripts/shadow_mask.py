@@ -43,7 +43,6 @@ class ShadowMask:
         rospy.loginfo('Performing inference on shadow detection net')
         mask_image = self.get_mask(cv_image)
 
-        rospy.loginfo('Publishing shadow mask')
         self.pub.publish(self.bridge.cv2_to_imgmsg(mask_image))
 
         cv2.waitKey(3)

@@ -59,11 +59,25 @@ class ShadowApproacher:
             msg: the data from the rostopic
         """
         try:
-            cv_image = self.bridge.imgmsg_to_cv2(msg, 'passthrough')
+            shadow_mask = self.bridge.imgmsg_to_cv2(msg, 'passthrough')
         except CvBridgeError as e:
             print(e)
 
-        self.mask = cv_image
+        # Apply morphological transformations and thresholding to get rid of noise
+        kernel = np.ones((5,5), np.uint8)
+        shadow_mask_grey = cv2.cvtColor(shadow_mask, cv2.COLOR_BGR2GRAY)
+        ret, shadow_mask_grey = cv2.threshold(shadow_mask_grey, 127, 255, cv2.THRESH_TOZERO)
+        shadow_mask_grey = cv2.erode(shadow_mask_grey, kernel, iterations=2)
+        shadow_mask_grey = cv2.dilate(shadow_mask_grey, kernel, iterations=1)
+        ret, shadow_mask_grey = cv2.threshold(shadow_mask_grey, 230, 255, cv2.THRESH_TOZERO)
+
+        # Draw contour around shadows
+        contours, hierarchy = cv2.findContours(shadow_mask_grey, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        # cnt = contours[4]
+        # cv.drawContours(shadow_mask, [cnt], 0, (0,255,0), 3)
+        cv2.drawContours(shadow_mask, contours, -1, (0,255,0), 3)
+
+        self.mask = shadow_mask
 
     def run(self):
         r = rospy.Rate(5)
