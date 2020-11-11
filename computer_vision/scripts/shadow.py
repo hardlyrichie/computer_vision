@@ -15,6 +15,7 @@ import pydensecrf.densecrf as dcrf
 import os
 from networks.MTMT import build_model
 import numpy as np
+import dill
 
 class ShadowApproacher:
     """" Class that provides the functionality to find and move toward shadows """
@@ -130,5 +131,10 @@ class ShadowApproacher:
         cv2.destroyAllWindows()
 
 if __name__ == '__main__':
-    node = ShadowApproacher()
-    node.run()
+    # node = ShadowApproacher()
+    # node.run()
+    MODEL_PATH= 'iter_10000.pth'
+    device = torch.device('cpu')
+    net = build_model('resnext101').to(device=device)
+    net.load_state_dict(torch.load(MODEL_PATH, map_location=device), strict=False)
+    torch.save(net, 'shadow_detection.pt', pickle_module=dill)
