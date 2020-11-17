@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-""" Neato robot that uses computer vision to look for and hide in shadows """
+""" Uses a shadow detection model to create shadow masks """
 
 import rospy
 from sensor_msgs.msg import Image
@@ -15,24 +15,28 @@ import time
 from config import MTMT_path
 
 class ShadowMask:
-    """" ROS node class that publishes the shadow mask from each camera image """
+    """" ROS node that processes images recieved to detect shadows and create a shadow mask """
     def __init__(self):
         rospy.init_node('ShadowMask')
 
+        # Path to saved model weights
         self.MODEL_PATH = MTMT_path
 
-        # topic that gets the request image from the ShadowApproacher node
         self.bridge = CvBridge()
 
+        # Topic that gets the request image from the ShadowApproacher node
         rospy.Subscriber('video_frame', Image, self.process_image)
+
         self.pub = rospy.Publisher('frame_mask', Image, queue_size=10)
 
+        # Use cpu for inference
         self.device = torch.device('cpu')
 
     def process_image(self, msg):
-        """ Recives images from the /camera/image_raw topic and processes it into
-            an openCV image.
+        """ 
+        Recives images from the video_frame topic, processes it, and publishes the shadow mask
 
+        Args:
             msg: the data from the rostopic
         """
         try:
@@ -49,7 +53,14 @@ class ShadowMask:
 
     @torch.no_grad()
     def get_mask(self, image, trans_scale=416):
-        """ Perform inference on shadow dection net """
+        """ 
+        Perform inference on shadow dection net using cpu 
+        
+        Args:
+            image: openCV image to detect shadow on
+            trans_scale: size to scale image to
+        """
+        # Load trained model and set to evaluation mode
         net = torch.load(self.MODEL_PATH, map_location=self.device)
         net.eval()
 
@@ -77,7 +88,14 @@ class ShadowMask:
         return cv2.cvtColor(np.array(prediction), cv2.COLOR_RGB2BGR)
 
     def crf_refine(self, img, annos):
-        """ https://github.com/eraserNut/MTMT/blob/master/utils/util.py """
+        """ 
+        Helper function defined by MTMT model to refine segmentation results using Conditional Random Fields (CRFs)
+        
+        Taken from https://github.com/eraserNut/MTMT/blob/master/utils/util.py 
+
+        img: the original image
+        annos: segmentation results
+        """
         assert img.dtype == np.uint8
         assert annos.dtype == np.uint8
         assert img.shape[:2] == annos.shape
